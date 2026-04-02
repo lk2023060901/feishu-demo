@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bot Auth Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Bot Auth Console</p>
+          <h1>飞书 / QQ 机器人批量管理</h1>
+          <p class="hero-copy">
+            登录态会保存到当前项目目录下的 <code>data/auth</code>。未过期时可直接复用，不需要每次重新扫码。
+          </p>
+        </div>
+        <button id="refresh-button" class="ghost-button" type="button">刷新状态</button>
+      </section>
+
+      <section class="platform-grid">
+        <article class="panel" data-platform="feishu">
+          <header class="panel-header">
+            <div>
+              <p class="panel-kicker">Feishu</p>
+              <h2>飞书授权与机器人</h2>
+            </div>
+            <div class="status-wrap">
+              <span class="status-badge" data-role="auth-status">未授权</span>
+              <span class="status-meta" data-role="auth-meta"></span>
+            </div>
+          </header>
+
+          <div class="toolbar">
+            <button class="primary-button" data-action="auth">扫码授权</button>
+            <button class="ghost-button" data-action="clear-auth">清除授权</button>
+          </div>
+
+          <div class="auth-box">
+            <div class="qr-frame" data-role="qr-frame">
+              <div class="qr-placeholder">等待扫码任务</div>
+            </div>
+            <div class="auth-hint" data-role="auth-message">尚未启动授权流程。</div>
+          </div>
+
+          <label class="field">
+            <span>机器人名称</span>
+            <textarea data-role="names" rows="7" placeholder="每行一个机器人名称"></textarea>
+          </label>
+
+          <label class="field">
+            <span>描述</span>
+            <input data-role="description" placeholder="可选，批量创建时统一使用" />
+          </label>
+
+          <div class="toolbar">
+            <button class="primary-button" data-action="create">批量创建</button>
+            <button class="danger-button" data-action="delete">批量删除</button>
+          </div>
+
+          <div class="task-box">
+            <div class="task-head">
+              <span>任务日志</span>
+              <span class="task-summary" data-role="task-summary">空闲</span>
+            </div>
+            <pre class="task-log" data-role="task-log">暂无任务。</pre>
+          </div>
+
+          <div class="inventory-box">
+            <div class="task-head">
+              <span>本地清单</span>
+              <span class="task-summary" data-role="inventory-count">0 条</span>
+            </div>
+            <div class="inventory-list" data-role="inventory"></div>
+          </div>
+        </article>
+
+        <article class="panel" data-platform="qq">
+          <header class="panel-header">
+            <div>
+              <p class="panel-kicker">QQ</p>
+              <h2>QQ 授权与机器人</h2>
+            </div>
+            <div class="status-wrap">
+              <span class="status-badge" data-role="auth-status">未授权</span>
+              <span class="status-meta" data-role="auth-meta"></span>
+            </div>
+          </header>
+
+          <div class="toolbar">
+            <button class="primary-button" data-action="auth">扫码授权</button>
+            <button class="ghost-button" data-action="clear-auth">清除授权</button>
+          </div>
+
+          <div class="auth-box">
+            <div class="qr-frame" data-role="qr-frame">
+              <div class="qr-placeholder">等待扫码任务</div>
+            </div>
+            <div class="auth-hint" data-role="auth-message">尚未启动授权流程。</div>
+          </div>
+
+          <label class="field">
+            <span>机器人名称</span>
+            <textarea data-role="names" rows="7" placeholder="每行一个机器人名称"></textarea>
+          </label>
+
+          <label class="field">
+            <span>描述</span>
+            <input data-role="description" placeholder="可选，批量创建时统一使用" />
+          </label>
+
+          <div class="toolbar">
+            <button class="primary-button" data-action="create">批量创建</button>
+            <button class="danger-button" data-action="delete">批量删除</button>
+          </div>
+
+          <div class="task-box">
+            <div class="task-head">
+              <span>任务日志</span>
+              <span class="task-summary" data-role="task-summary">空闲</span>
+            </div>
+            <pre class="task-log" data-role="task-log">暂无任务。</pre>
+          </div>
+
+          <div class="inventory-box">
+            <div class="task-head">
+              <span>本地清单</span>
+              <span class="task-summary" data-role="inventory-count">0 条</span>
+            </div>
+            <div class="inventory-list" data-role="inventory"></div>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
