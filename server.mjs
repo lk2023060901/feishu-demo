@@ -20,10 +20,14 @@ import {
   appendTaskResult,
   createTask,
   failTask,
+  findRunningTask,
   finishTask,
   getTask,
   updateTask,
 } from './lib/tasks.mjs';
+
+const QR_STALE_MS = 45_000;
+const AUTH_TASK_BOOTSTRAP_MS = 20_000;
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -126,6 +130,41 @@ async function getState() {
   };
 }
 
+function isFreshQr(task) {
+  if (!task?.qrDataUrl || !task?.qrUpdatedAt) {
+    return false;
+  }
+  const updatedAt = new Date(task.qrUpdatedAt).getTime();
+  if (!Number.isFinite(updatedAt)) {
+    return false;
+  }
+  return Date.now() - updatedAt < QR_STALE_MS;
+}
+
+function isRecentlyUpdated(task, maxAgeMs) {
+  const updatedAt = new Date(task?.updatedAt || '').getTime();
+  if (!Number.isFinite(updatedAt)) {
+    return false;
+  }
+  return Date.now() - updatedAt < maxAgeMs;
+}
+
+function presentTask(task) {
+  if (!task) {
+    return null;
+  }
+
+  if (task.kind === 'auth' && task.status === 'running' && task.qrDataUrl && !isFreshQr(task)) {
+    return {
+      ...task,
+      qrDataUrl: null,
+      message: '二维码已过期，正在刷新，请稍候几秒。',
+    };
+  }
+
+  return task;
+}
+
 function startBackgroundTask(task, runner) {
   void (async () => {
     try {
@@ -155,11 +194,25 @@ async function loadValidatedAuth(platform) {
 }
 
 async function handleStartAuth(platform, res) {
+  const existingTask = findRunningTask({
+    kind: 'auth',
+    platform,
+  });
+
+  if (existingTask) {
+    if (isFreshQr(existingTask) || (!existingTask.qrDataUrl && isRecentlyUpdated(existingTask, AUTH_TASK_BOOTSTRAP_MS))) {
+      json(res, 200, presentTask(existingTask));
+      return;
+    }
+
+    failTask(existingTask.id, new Error('旧授权任务已过期，已重新发起授权流程。'));
+  }
+
   const task = createTask({
     kind: 'auth',
     platform,
     title: `${platform} auth`,
-    message: `准备启动 ${platform} 授权`,
+    message: `正在打开 ${platform === 'feishu' ? '飞书' : 'QQ'} 登录页，二维码通常会在几秒内出现`,
   });
 
   startBackgroundTask(task, async () => {
@@ -167,11 +220,19 @@ async function handleStartAuth(platform, res) {
     const auth = platform === 'feishu'
       ? await authorizeFeishu({
           onLog: (message) => appendTaskLog(task.id, message),
-          onQr: (qrcodeUrl) => updateTask(task.id, { qrDataUrl: qrcodeUrl, message: '请扫码登录' }),
+          onQr: (qrcodeUrl) => updateTask(task.id, {
+            qrDataUrl: qrcodeUrl,
+            qrUpdatedAt: new Date().toISOString(),
+            message: '请扫码登录',
+          }),
         })
       : await authorizeQq({
           onLog: (message) => appendTaskLog(task.id, message),
-          onQr: (qrcodeUrl) => updateTask(task.id, { qrDataUrl: qrcodeUrl, message: '请扫码登录' }),
+          onQr: (qrcodeUrl) => updateTask(task.id, {
+            qrDataUrl: qrcodeUrl,
+            qrUpdatedAt: new Date().toISOString(),
+            message: '请扫码登录',
+          }),
         });
 
     await writeAuth(platform, auth);
@@ -334,7 +395,7 @@ async function route(req, res) {
       notFound(res);
       return;
     }
-    json(res, 200, task);
+    json(res, 200, presentTask(task));
     return;
   }
 
@@ -388,7 +449,7 @@ async function route(req, res) {
 
 await ensureStorage();
 
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 const NO_LISTEN = process.env.NO_LISTEN === '1';
 
 const server = http.createServer((req, res) => {
