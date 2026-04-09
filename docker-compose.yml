@@ -1,0 +1,17 @@
+services:
+  feishu-demo:
+    build:
+      context: .
+    container_name: feishu-demo
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3030"
+      SHOW_BROWSER: "0"
+      CHROME_PATH: /usr/bin/chromium
+      CHROME_NO_SANDBOX: "1"
+    ports:
+      - "0.0.0.0:3030:3030"
+    restart: unless-stopped
+    shm_size: "1gb"
+    volumes:
+      - ./data:/app/data

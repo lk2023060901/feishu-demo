@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getAvatarPresetPayload, normalizeAvatarAppearance, renderAvatarAsset } from './lib/avatar.mjs';
 import { createFeishuBot, authorizeFeishu, deleteFeishuBotsByNames, validateFeishuAuth } from './lib/feishu.mjs';
 import { createQqBotWithProfile, authorizeQq, deleteQqBotsByNames, validateQqAuth } from './lib/qq.mjs';
 import { summarizeBatchResults, uniqueNonEmptyLines, sanitizeBotForClient } from './lib/common.mjs';
@@ -131,6 +132,10 @@ function startBackgroundTask(task, runner) {
     try {
       await runner();
     } catch (error) {
+      updateTask(task.id, {
+        qrDataUrl: null,
+        qrExpiresAt: null,
+      });
       appendTaskLog(task.id, error instanceof Error ? error.message : String(error));
       failTask(task.id, error);
     }
@@ -164,14 +169,31 @@ async function handleStartAuth(platform, res) {
 
   startBackgroundTask(task, async () => {
     appendTaskLog(task.id, `开始 ${platform === 'feishu' ? '飞书' : 'QQ'} 授权流程。`);
+    let qrRefreshCount = 0;
+    const publishQrToTask = (payload) => {
+      const qrDataUrl = typeof payload === 'string' ? payload : payload?.dataUrl;
+      if (!qrDataUrl) {
+        return;
+      }
+
+      qrRefreshCount += 1;
+      updateTask(task.id, {
+        qrDataUrl,
+        qrExpiresAt: typeof payload === 'string' ? null : payload?.expiresAt || null,
+        qrRefreshCount,
+        message: qrRefreshCount === 1
+          ? '请扫码登录'
+          : `二维码已自动刷新，请使用最新二维码扫码（第 ${qrRefreshCount} 次）。`,
+      });
+    };
     const auth = platform === 'feishu'
       ? await authorizeFeishu({
           onLog: (message) => appendTaskLog(task.id, message),
-          onQr: (qrcodeUrl) => updateTask(task.id, { qrDataUrl: qrcodeUrl, message: '请扫码登录' }),
+          onQr: publishQrToTask,
         })
       : await authorizeQq({
           onLog: (message) => appendTaskLog(task.id, message),
-          onQr: (qrcodeUrl) => updateTask(task.id, { qrDataUrl: qrcodeUrl, message: '请扫码登录' }),
+          onQr: publishQrToTask,
         });
 
     await writeAuth(platform, auth);
@@ -183,6 +205,7 @@ async function handleStartAuth(platform, res) {
     finishTask(task.id, {
       message: '授权完成。',
       qrDataUrl: null,
+      qrExpiresAt: null,
     });
   });
 
@@ -203,6 +226,9 @@ async function handleCreateBots(platform, req, res) {
   }
 
   const description = String(body.description || '').trim();
+  const avatarAppearance = platform === 'feishu'
+    ? normalizeAvatarAppearance(body.avatarAppearance)
+    : null;
   const task = createTask({
     kind: 'create',
     platform,
@@ -212,6 +238,20 @@ async function handleCreateBots(platform, req, res) {
 
   startBackgroundTask(task, async () => {
     const auth = await loadValidatedAuth(platform);
+    let avatarAsset = null;
+    if (avatarAppearance) {
+      appendTaskLog(task.id, '正在生成机器人头像。');
+      try {
+        avatarAsset = await renderAvatarAsset(avatarAppearance);
+        appendTaskLog(task.id, '头像模板已生成，将用于本次批量创建。');
+      } catch (error) {
+        appendTaskLog(
+          task.id,
+          `头像模板生成失败，已回退到默认头像：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     const results = [];
 
     for (const name of names) {
@@ -219,6 +259,7 @@ async function handleCreateBots(platform, req, res) {
       try {
         const created = platform === 'feishu'
           ? await createFeishuBot(auth, {
+              avatarAsset,
               description,
               name,
               onLog: (message) => appendTaskLog(task.id, `[${name}] ${message}`),
@@ -235,6 +276,7 @@ async function handleCreateBots(platform, req, res) {
           description: created.description,
           meta: platform === 'feishu'
             ? {
+                avatarAppearance: created.avatarAppearance || null,
                 unresolvedScopes: created.unresolvedScopes,
                 versionId: created.versionId,
               }
@@ -321,6 +363,11 @@ async function handleDeleteBots(platform, req, res) {
 async function route(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const { pathname } = url;
+
+  if (req.method === 'GET' && pathname === '/api/avatar-presets') {
+    json(res, 200, getAvatarPresetPayload());
+    return;
+  }
 
   if (req.method === 'GET' && pathname === '/api/state') {
     json(res, 200, await getState());
