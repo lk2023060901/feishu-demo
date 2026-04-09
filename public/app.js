@@ -51,6 +51,10 @@ function getElements(platform) {
   };
 }
 
+function hasAvatarControls(elements) {
+  return Boolean(elements.avatarBackgrounds && elements.avatarIcons && elements.avatarPreview);
+}
+
 function setBusy(platform, busy) {
   const { toolbarButtons } = getElements(platform);
   toolbarButtons.forEach((button) => {
@@ -195,6 +199,41 @@ function getQrMetaText(task) {
   return parts.join(' · ');
 }
 
+function formatTaskResult(platform, task, item) {
+  if (item.ok) {
+    if (platform === 'feishu' && task.kind === 'create') {
+      return `名称: ${item.name || '-'} | App ID: ${item.appId || '-'} | Secret: ${item.secret || '-'}`;
+    }
+
+    const details = [];
+    if (item.name) {
+      details.push(`名称: ${item.name}`);
+    }
+    if (item.appId) {
+      details.push(`App ID: ${item.appId}`);
+    }
+    if (item.savedAt) {
+      details.push(`保存时间: ${formatTime(item.savedAt)}`);
+    }
+    if (item.message) {
+      details.push(item.message);
+    }
+    return details.join(' | ') || '成功';
+  }
+
+  const details = [];
+  if (item.name) {
+    details.push(`名称: ${item.name}`);
+  }
+  if (item.appId) {
+    details.push(`App ID: ${item.appId}`);
+  }
+  if (item.message) {
+    details.push(`原因: ${item.message}`);
+  }
+  return details.join(' | ') || '失败';
+}
+
 function renderTask(platform, task) {
   const { authMessage, qrMeta, taskLog, taskSummary } = getElements(platform);
   if (!task) {
@@ -213,11 +252,25 @@ function renderTask(platform, task) {
     }
   }
   if (task.results?.length) {
+    const successItems = task.results.filter((item) => item.ok);
+    const failureItems = task.results.filter((item) => !item.ok);
+
     lines.push('');
     lines.push('结果:');
-    for (const item of task.results) {
-      const prefix = item.ok ? 'OK' : 'ERR';
-      lines.push(`${prefix} ${item.name || '-'} ${item.appId || ''} ${item.message || ''}`.trim());
+    if (successItems.length) {
+      lines.push('成功:');
+      for (const item of successItems) {
+        lines.push(formatTaskResult(platform, task, item));
+      }
+    }
+    if (failureItems.length) {
+      if (successItems.length) {
+        lines.push('');
+      }
+      lines.push('失败:');
+      for (const item of failureItems) {
+        lines.push(formatTaskResult(platform, task, item));
+      }
     }
   }
   taskLog.textContent = lines.join('\n') || '暂无日志。';
@@ -337,8 +390,11 @@ async function loadAvatarPresets() {
 
   avatarPresets = payload;
   for (const platform of platforms) {
-    ensureAvatarSelection(platform);
-    renderAvatarControls(platform);
+    const elements = getElements(platform);
+    if (hasAvatarControls(elements)) {
+      ensureAvatarSelection(platform);
+      renderAvatarControls(platform);
+    }
   }
 }
 
@@ -346,20 +402,22 @@ function bindPlatform(platform) {
   const panel = getPanel(platform);
   const elements = getElements(platform);
 
-  panel.addEventListener('click', (event) => {
-    const backgroundButton = event.target.closest('[data-avatar-bg]');
-    if (backgroundButton) {
-      ensureAvatarSelection(platform).backgroundColor = backgroundButton.dataset.avatarBg;
-      renderAvatarControls(platform);
-      return;
-    }
+  if (hasAvatarControls(elements)) {
+    panel.addEventListener('click', (event) => {
+      const backgroundButton = event.target.closest('[data-avatar-bg]');
+      if (backgroundButton) {
+        ensureAvatarSelection(platform).backgroundColor = backgroundButton.dataset.avatarBg;
+        renderAvatarControls(platform);
+        return;
+      }
 
-    const iconButton = event.target.closest('[data-avatar-icon]');
-    if (iconButton) {
-      ensureAvatarSelection(platform).icon = iconButton.dataset.avatarIcon;
-      renderAvatarControls(platform);
-    }
-  });
+      const iconButton = event.target.closest('[data-avatar-icon]');
+      if (iconButton) {
+        ensureAvatarSelection(platform).icon = iconButton.dataset.avatarIcon;
+        renderAvatarControls(platform);
+      }
+    });
+  }
 
   panel.querySelector('[data-action="auth"]').addEventListener('click', () => {
     startTask(platform, `/api/${platform}/auth/start`, {

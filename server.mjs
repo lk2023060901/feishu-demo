@@ -292,6 +292,7 @@ async function handleCreateBots(platform, req, res) {
           message: '创建成功。',
           name: created.name,
           ok: true,
+          secret: platform === 'feishu' ? created.appSecret : null,
         };
         results.push(result);
         appendTaskResult(task.id, result);
