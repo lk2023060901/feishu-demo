@@ -8,6 +8,10 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "dev": "node --watch server.mjs"
+    "dev": "node --watch server.mjs",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:restart": "docker compose restart feishu-demo",
+    "docker:logs": "docker compose logs -f feishu-demo"
   }
 }
