@@ -202,7 +202,18 @@ function getQrMetaText(task) {
 function formatTaskResult(platform, task, item) {
   if (item.ok) {
     if (platform === 'feishu' && task.kind === 'create') {
-      return `名称: ${item.name || '-'} | App ID: ${item.appId || '-'} | Secret: ${item.secret || '-'}`;
+      const details = [
+        `名称: ${item.name || '-'}`,
+        `App ID: ${item.appId || '-'}`,
+        `Secret: ${item.secret || '-'}`,
+      ];
+      if (item.attempts > 1) {
+        details.push(`尝试次数: ${item.attempts}`);
+      }
+      if (item.message) {
+        details.push(item.message);
+      }
+      return details.join(' | ');
     }
 
     const details = [];
@@ -230,6 +241,9 @@ function formatTaskResult(platform, task, item) {
   }
   if (item.message) {
     details.push(`原因: ${item.message}`);
+  }
+  if (item.attempts) {
+    details.push(`尝试次数: ${item.attempts}`);
   }
   return details.join(' | ') || '失败';
 }

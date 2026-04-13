@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { getAvatarPresetPayload, normalizeAvatarAppearance, renderAvatarAsset } from './lib/avatar.mjs';
 import { createFeishuBot, authorizeFeishu, deleteFeishuBotsByNames, validateFeishuAuth } from './lib/feishu.mjs';
 import { createQqBotWithProfile, authorizeQq, deleteQqBotsByNames, validateQqAuth } from './lib/qq.mjs';
-import { summarizeBatchResults, uniqueNonEmptyLines, sanitizeBotForClient } from './lib/common.mjs';
+import { sleep, summarizeBatchResults, uniqueNonEmptyLines, sanitizeBotForClient } from './lib/common.mjs';
 import { PUBLIC_DIR, SERVER_PORT } from './lib/config.mjs';
 import {
   clearAuth,
@@ -33,6 +33,9 @@ const MIME_TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
 };
+
+const CREATE_BOT_MAX_ATTEMPTS = 10;
+const CREATE_BOT_RETRY_DELAY_MS = 3_000;
 
 function json(res, status, payload) {
   const body = `${JSON.stringify(payload, null, 2)}\n`;
@@ -159,6 +162,37 @@ async function loadValidatedAuth(platform) {
   return auth;
 }
 
+async function createBotWithRetries(platform, auth, options = {}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= CREATE_BOT_MAX_ATTEMPTS; attempt += 1) {
+    options.onRetryLog?.(`第 ${attempt}/${CREATE_BOT_MAX_ATTEMPTS} 次创建尝试开始。`);
+
+    try {
+      const created = platform === 'feishu'
+        ? await createFeishuBot(auth, options)
+        : await createQqBotWithProfile(auth, options);
+
+      return {
+        attempts: attempt,
+        created,
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      options.onRetryLog?.(`第 ${attempt}/${CREATE_BOT_MAX_ATTEMPTS} 次创建失败：${lastError.message}`);
+
+      if (attempt >= CREATE_BOT_MAX_ATTEMPTS) {
+        break;
+      }
+
+      options.onRetryLog?.(`将在 ${Math.ceil(CREATE_BOT_RETRY_DELAY_MS / 1000)} 秒后重试。`);
+      await sleep(CREATE_BOT_RETRY_DELAY_MS);
+    }
+  }
+
+  throw new Error(`创建失败，已连续重试 ${CREATE_BOT_MAX_ATTEMPTS} 次：${lastError ? lastError.message : '未知错误'}`);
+}
+
 async function handleStartAuth(platform, res) {
   const task = createTask({
     kind: 'auth',
@@ -257,18 +291,13 @@ async function handleCreateBots(platform, req, res) {
     for (const name of names) {
       appendTaskLog(task.id, `开始处理：${name}`);
       try {
-        const created = platform === 'feishu'
-          ? await createFeishuBot(auth, {
-              avatarAsset,
-              description,
-              name,
-              onLog: (message) => appendTaskLog(task.id, `[${name}] ${message}`),
-            })
-          : await createQqBotWithProfile(auth, {
-              description,
-              name,
-              onLog: (message) => appendTaskLog(task.id, `[${name}] ${message}`),
-            });
+        const { attempts, created } = await createBotWithRetries(platform, auth, {
+          avatarAsset,
+          description,
+          name,
+          onLog: (message) => appendTaskLog(task.id, `[${name}] ${message}`),
+          onRetryLog: (message) => appendTaskLog(task.id, `[${name}] ${message}`),
+        });
 
         await upsertBot(platform, {
           appId: created.appId,
@@ -289,7 +318,8 @@ async function handleCreateBots(platform, req, res) {
 
         const result = {
           appId: created.appId,
-          message: '创建成功。',
+          attempts,
+          message: attempts > 1 ? `创建成功（第 ${attempts} 次尝试）。` : '创建成功。',
           name: created.name,
           ok: true,
           secret: platform === 'feishu' ? created.appSecret : null,
@@ -299,6 +329,7 @@ async function handleCreateBots(platform, req, res) {
       } catch (error) {
         const result = {
           appId: null,
+          attempts: CREATE_BOT_MAX_ATTEMPTS,
           message: error instanceof Error ? error.message : String(error),
           name,
           ok: false,
