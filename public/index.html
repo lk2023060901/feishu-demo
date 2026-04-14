@@ -16,7 +16,10 @@
             登录态会保存到当前项目目录下的 <code>data/auth</code>。未过期时可直接复用，不需要每次重新扫码。
           </p>
         </div>
-        <button id="refresh-button" class="ghost-button" type="button">刷新状态</button>
+        <div class="hero-actions">
+          <button id="open-inventory-button" class="ghost-button" type="button">全部机器人</button>
+          <button id="refresh-button" class="ghost-button" type="button">刷新状态</button>
+        </div>
       </section>
 
       <section class="platform-grid">
@@ -135,6 +138,46 @@
         </article>
       </section>
     </main>
+
+    <dialog id="inventory-dialog" class="inventory-dialog">
+      <div class="inventory-dialog-shell">
+        <header class="inventory-dialog-header">
+          <div>
+            <p class="panel-kicker">Inventory Export</p>
+            <h2>全部机器人</h2>
+            <p class="inventory-dialog-copy">飞书使用当前扫码授权账号的远端应用列表，QQ 使用本地清单，并支持 CSV / Excel 导出。</p>
+          </div>
+          <div class="inventory-dialog-actions">
+            <button id="export-csv-button" class="ghost-button" type="button">导出 CSV</button>
+            <button id="export-excel-button" class="ghost-button" type="button">导出 Excel</button>
+            <button id="close-inventory-button" class="ghost-button" type="button">关闭</button>
+          </div>
+        </header>
+
+        <div class="inventory-dialog-summary">
+          <div class="inventory-filter-bar">
+            <label class="field inventory-filter-field">
+              <span>名称过滤</span>
+              <input id="inventory-filter-name" placeholder="按机器人名称筛选" />
+            </label>
+            <label class="field inventory-filter-field">
+              <span>开始时间</span>
+              <input id="inventory-filter-from" type="date" />
+            </label>
+            <label class="field inventory-filter-field">
+              <span>结束时间</span>
+              <input id="inventory-filter-to" type="date" />
+            </label>
+            <div class="inventory-filter-actions">
+              <button id="apply-inventory-filter-button" class="ghost-button" type="button">应用过滤</button>
+              <span class="task-summary" id="inventory-dialog-total">0 条</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="inventory-dialog-content" class="inventory-modal-grid"></div>
+      </div>
+    </dialog>
 
     <script type="module" src="/app.js"></script>
   </body>

@@ -3,7 +3,14 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getAvatarPresetPayload, normalizeAvatarAppearance, renderAvatarAsset } from './lib/avatar.mjs';
-import { createFeishuBot, authorizeFeishu, deleteFeishuBotsByNames, validateFeishuAuth } from './lib/feishu.mjs';
+import {
+  createFeishuBot,
+  authorizeFeishu,
+  deleteFeishuBotsByNames,
+  getFeishuBotSecrets,
+  getFeishuOpenApps,
+  validateFeishuAuth,
+} from './lib/feishu.mjs';
 import { createQqBotWithProfile, authorizeQq, deleteQqBotsByNames, validateQqAuth } from './lib/qq.mjs';
 import { sleep, summarizeBatchResults, uniqueNonEmptyLines, sanitizeBotForClient } from './lib/common.mjs';
 import { PUBLIC_DIR, SERVER_PORT } from './lib/config.mjs';
@@ -15,6 +22,7 @@ import {
   readInventory,
   upsertBot,
   writeAuth,
+  writeInventory,
 } from './lib/storage.mjs';
 import {
   appendTaskLog,
@@ -126,6 +134,147 @@ async function getState() {
     inventory: {
       feishu: inventory.feishu.map(sanitizeBotForClient),
       qq: inventory.qq.map(sanitizeBotForClient),
+    },
+  };
+}
+
+function getItemFilterTimestamp(item) {
+  for (const candidate of [item?.updatedAt, item?.updateTime, item?.createdAt, item?.createTime]) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return candidate > 1_000_000_000_000 ? candidate : candidate * 1000;
+    }
+    const parsed = Date.parse(String(candidate || ''));
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
+function parseDateBoundary(value, boundary) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const time = boundary === 'end' ? '23:59:59.999' : '00:00:00.000';
+  const parsed = Date.parse(`${normalized}T${time}`);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function matchesInventoryFilters(item, filters) {
+  if (item?.deletedAt) {
+    return false;
+  }
+
+  const nameQuery = String(filters?.name || '').trim().toLowerCase();
+  if (nameQuery && !String(item?.name || '').toLowerCase().includes(nameQuery)) {
+    return false;
+  }
+
+  const timestamp = getItemFilterTimestamp(item);
+  if (filters?.fromAt !== null && timestamp < filters.fromAt) {
+    return false;
+  }
+  if (filters?.toAt !== null && timestamp > filters.toAt) {
+    return false;
+  }
+
+  return true;
+}
+
+function sortInventoryItems(items) {
+  return [...items].sort((left, right) => getItemFilterTimestamp(right) - getItemFilterTimestamp(left));
+}
+
+async function getExportInventory(url) {
+  const filters = {
+    fromAt: parseDateBoundary(url.searchParams.get('from'), 'start'),
+    name: url.searchParams.get('name') || '',
+    toAt: parseDateBoundary(url.searchParams.get('to'), 'end'),
+  };
+
+  const inventory = await readInventory();
+  const nextInventory = {
+    feishu: Array.isArray(inventory.feishu) ? [...inventory.feishu] : [],
+    qq: Array.isArray(inventory.qq) ? [...inventory.qq] : [],
+  };
+  const localFeishuByAppId = new Map(nextInventory.feishu.map((item) => [item.appId, item]));
+
+  const filteredQq = sortInventoryItems(nextInventory.qq.filter((item) => matchesInventoryFilters(item, filters)));
+  let feishuSecrets = {};
+  let feishuExportItems = sortInventoryItems(nextInventory.feishu.filter((item) => matchesInventoryFilters(item, filters))).map((item) => ({
+    appId: item.appId,
+    createdAt: item.createdAt || null,
+    description: item.description || '',
+    name: item.name || '',
+    platform: 'feishu',
+    secret: String(item.appSecret || ''),
+    updatedAt: item.updatedAt || null,
+  }));
+
+  const auth = await readAuth('feishu');
+  if (auth) {
+    const validation = await validateFeishuAuth(auth);
+    if (validation.valid) {
+      const remoteApps = await getFeishuOpenApps(auth, [0]).catch(() => []);
+      if (remoteApps.length) {
+        const filteredRemoteFeishu = sortInventoryItems(remoteApps.filter((item) => matchesInventoryFilters(item, filters)));
+        const missingFeishuSecretIds = filteredRemoteFeishu
+          .map((item) => String(item?.appID || '').trim())
+          .filter((appId) => appId && !String(localFeishuByAppId.get(appId)?.appSecret || '').trim());
+
+        if (missingFeishuSecretIds.length) {
+          feishuSecrets = await getFeishuBotSecrets(auth, missingFeishuSecretIds);
+
+          let changed = false;
+          for (const item of nextInventory.feishu) {
+            const resolvedSecret = feishuSecrets[item.appId];
+            if (resolvedSecret && item.appSecret !== resolvedSecret) {
+              item.appSecret = resolvedSecret;
+              changed = true;
+            }
+          }
+
+          if (changed) {
+            await writeInventory(nextInventory);
+          }
+        }
+
+        feishuExportItems = filteredRemoteFeishu.map((item) => {
+          const appId = String(item?.appID || '').trim();
+          const localItem = localFeishuByAppId.get(appId);
+          return {
+            appId,
+            createdAt: item?.createTime ? new Date(getItemFilterTimestamp({ createTime: item.createTime })).toISOString() : localItem?.createdAt || null,
+            description: String(item?.desc || item?.i18n?.zh_cn?.description || localItem?.description || ''),
+            name: String(item?.name || item?.i18n?.zh_cn?.name || localItem?.name || ''),
+            platform: 'feishu',
+            secret: String(localItem?.appSecret || feishuSecrets[appId] || ''),
+            updatedAt: item?.updateTime ? new Date(getItemFilterTimestamp({ updateTime: item.updateTime })).toISOString() : localItem?.updatedAt || null,
+          };
+        });
+      }
+    }
+  }
+
+  return {
+    filters: {
+      from: url.searchParams.get('from') || '',
+      name: filters.name,
+      to: url.searchParams.get('to') || '',
+    },
+    inventory: {
+      feishu: feishuExportItems,
+      qq: filteredQq.map((item) => ({
+        appId: item.appId,
+        createdAt: item.createdAt || null,
+        description: item.description || '',
+        name: item.name || '',
+        platform: 'qq',
+        secret: String(item.clientSecret || ''),
+        updatedAt: item.updatedAt || null,
+      })),
     },
   };
 }
@@ -301,6 +450,8 @@ async function handleCreateBots(platform, req, res) {
 
         await upsertBot(platform, {
           appId: created.appId,
+          appSecret: platform === 'feishu' ? created.appSecret : undefined,
+          clientSecret: platform === 'qq' ? created.clientSecret : undefined,
           createdAt: new Date().toISOString(),
           description: created.description,
           meta: platform === 'feishu'
@@ -403,6 +554,11 @@ async function route(req, res) {
 
   if (req.method === 'GET' && pathname === '/api/state') {
     json(res, 200, await getState());
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/inventory/export') {
+    json(res, 200, await getExportInventory(url));
     return;
   }
 

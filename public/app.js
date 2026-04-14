@@ -1,4 +1,8 @@
 const platforms = ['feishu', 'qq'];
+const platformLabels = {
+  feishu: '飞书',
+  qq: 'QQ',
+};
 const activeTasks = {
   feishu: null,
   qq: null,
@@ -6,6 +10,21 @@ const activeTasks = {
 const avatarSelections = {
   feishu: null,
   qq: null,
+};
+const currentState = {
+  auth: {},
+  inventory: {
+    feishu: [],
+    qq: [],
+  },
+};
+const exportInventoryState = {
+  inventory: {
+    feishu: [],
+    qq: [],
+  },
+  loading: false,
+  error: '',
 };
 
 let avatarPresets = null;
@@ -24,6 +43,22 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function formatPlatformLabel(platform) {
+  return platformLabels[platform] || platform;
+}
+
+function getInventoryTimestamp(item) {
+  return Date.parse(item?.updatedAt || item?.createdAt || '') || 0;
+}
+
+function sortInventoryItems(items) {
+  return [...(items || [])].sort((left, right) => getInventoryTimestamp(right) - getInventoryTimestamp(left));
+}
+
+function getVisibleInventoryItems(items) {
+  return sortInventoryItems(items).filter((item) => !item?.deletedAt);
 }
 
 function getPanel(platform) {
@@ -294,17 +329,18 @@ function renderTask(platform, task) {
 }
 
 function renderInventory(platform, items) {
+  const visibleItems = getVisibleInventoryItems(items);
   const { inventory, inventoryCount } = getElements(platform);
-  inventoryCount.textContent = `${items.length} 条`;
-  if (!items.length) {
+  inventoryCount.textContent = `${visibleItems.length} 条`;
+  if (!visibleItems.length) {
     inventory.innerHTML = '<div class="inventory-empty">暂无记录</div>';
     return;
   }
 
-  inventory.innerHTML = items.map((item) => {
+  inventory.innerHTML = visibleItems.map((item) => {
     const avatarMarkup = buildAvatarSvgMarkup(item.meta?.avatarAppearance || null, 44);
     return `
-      <article class="inventory-item ${item.deletedAt ? 'is-deleted' : ''}">
+      <article class="inventory-item">
         <div class="inventory-main">
           ${avatarMarkup ? `<div class="inventory-avatar">${avatarMarkup}</div>` : ''}
           <div class="inventory-copy">
@@ -313,12 +349,269 @@ function renderInventory(platform, items) {
           </div>
         </div>
         <div class="inventory-side">
-          <span class="inventory-tag">${item.deletedAt ? '已删除' : '有效'}</span>
+          <span class="inventory-tag">有效</span>
           <span class="inventory-time">${formatTime(item.updatedAt || item.createdAt)}</span>
         </div>
       </article>
     `;
   }).join('');
+}
+
+function getExportRows() {
+  const rows = [];
+
+  for (const platform of platforms) {
+    for (const item of sortInventoryItems(exportInventoryState.inventory[platform] || [])) {
+      rows.push({
+        platform: formatPlatformLabel(platform),
+        name: item.name || '',
+        appId: item.appId || '',
+        secret: item.secret || '',
+        description: item.description || '',
+        updatedAt: formatTime(item.updatedAt || item.createdAt),
+        createdAt: formatTime(item.createdAt),
+      });
+    }
+  }
+
+  return rows;
+}
+
+function csvEscape(value) {
+  const normalized = String(value ?? '');
+  if (!/[",\r\n]/u.test(normalized)) {
+    return normalized;
+  }
+  return `"${normalized.replaceAll('"', '""')}"`;
+}
+
+function buildCsvContent(rows) {
+  const header = ['平台', '机器人名称', 'App ID', 'Secret', '描述', '更新时间', '创建时间'];
+  const lines = [
+    header.join(','),
+    ...rows.map((row) => ([
+      row.platform,
+      row.name,
+      row.appId,
+      row.secret,
+      row.description,
+      row.updatedAt,
+      row.createdAt,
+    ].map(csvEscape).join(','))),
+  ];
+  return `\uFEFF${lines.join('\r\n')}`;
+}
+
+function buildExcelContent(rows) {
+  const header = ['平台', '机器人名称', 'App ID', 'Secret', '描述', '更新时间', '创建时间'];
+  const body = rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.platform)}</td>
+      <td>${escapeHtml(row.name)}</td>
+      <td>${escapeHtml(row.appId)}</td>
+      <td>${escapeHtml(row.secret)}</td>
+      <td>${escapeHtml(row.description)}</td>
+      <td>${escapeHtml(row.updatedAt)}</td>
+      <td>${escapeHtml(row.createdAt)}</td>
+    </tr>
+  `).join('');
+
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #d9d0c2; padding: 8px 10px; text-align: left; }
+      th { background: #f5efe4; }
+    </style>
+  </head>
+  <body>
+    <table>
+      <thead>
+        <tr>${header.map((label) => `<th>${escapeHtml(label)}</th>`).join('')}</tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>
+  </body>
+</html>`;
+}
+
+function buildExportFileName(extension) {
+  const timestamp = new Date().toISOString().replaceAll(':', '').replaceAll('-', '').replace('T', '-').slice(0, 15);
+  return `bot-inventory-${timestamp}.${extension}`;
+}
+
+function downloadBlob(content, type, fileName) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+
+function renderInventoryDialog() {
+  const dialogTotal = document.getElementById('inventory-dialog-total');
+  const dialogContent = document.getElementById('inventory-dialog-content');
+
+  if (exportInventoryState.loading) {
+    dialogTotal.textContent = '读取中';
+    dialogContent.innerHTML = '<div class="inventory-empty">正在读取机器人清单并补齐 Secret，请稍候…</div>';
+    return;
+  }
+
+  if (exportInventoryState.error) {
+    dialogTotal.textContent = '失败';
+    dialogContent.innerHTML = `<div class="inventory-empty">${escapeHtml(exportInventoryState.error)}</div>`;
+    return;
+  }
+
+  const rows = getExportRows();
+
+  dialogTotal.textContent = `${rows.length} 条`;
+  if (!rows.length) {
+    dialogContent.innerHTML = '<div class="inventory-empty">没有符合当前过滤条件的机器人记录。</div>';
+    return;
+  }
+
+  dialogContent.innerHTML = platforms.map((platform) => {
+    const items = sortInventoryItems(exportInventoryState.inventory[platform] || []);
+    const label = formatPlatformLabel(platform);
+
+    if (!items.length) {
+      return `
+        <section class="inventory-modal-section">
+          <div class="task-head">
+            <span>${escapeHtml(label)}</span>
+            <span class="task-summary">0 条</span>
+          </div>
+          <div class="inventory-empty">暂无记录</div>
+        </section>
+      `;
+    }
+
+    return `
+      <section class="inventory-modal-section">
+        <div class="task-head">
+          <span>${escapeHtml(label)}</span>
+          <span class="task-summary">${items.length} 条</span>
+        </div>
+        <div class="inventory-modal-table-wrap">
+          <table class="inventory-table">
+            <thead>
+              <tr>
+                <th>机器人</th>
+                <th>App ID</th>
+                <th>Secret</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map((item) => `
+                <tr>
+                  <td class="inventory-table-name">
+                    <strong>${escapeHtml(item.name)}</strong>
+                    <small>${escapeHtml(item.description || '无描述')}</small>
+                  </td>
+                  <td><code>${escapeHtml(item.appId)}</code></td>
+                  <td><code class="inventory-secret">${escapeHtml(item.secret || '-')}</code></td>
+                  <td>${escapeHtml(formatTime(item.updatedAt || item.createdAt))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }).join('');
+}
+
+function openInventoryDialog() {
+  const dialog = document.getElementById('inventory-dialog');
+  renderInventoryDialog();
+  dialog.showModal();
+  void loadExportInventory();
+}
+
+function getInventoryFilterValues() {
+  return {
+    from: document.getElementById('inventory-filter-from').value.trim(),
+    name: document.getElementById('inventory-filter-name').value.trim(),
+    to: document.getElementById('inventory-filter-to').value.trim(),
+  };
+}
+
+function buildInventoryExportUrl() {
+  const params = new URLSearchParams();
+  const filters = getInventoryFilterValues();
+
+  if (filters.name) {
+    params.set('name', filters.name);
+  }
+  if (filters.from) {
+    params.set('from', filters.from);
+  }
+  if (filters.to) {
+    params.set('to', filters.to);
+  }
+
+  const query = params.toString();
+  return query ? `/api/inventory/export?${query}` : '/api/inventory/export';
+}
+
+async function loadExportInventory() {
+  exportInventoryState.loading = true;
+  exportInventoryState.error = '';
+  renderInventoryDialog();
+
+  try {
+    const response = await fetch(buildInventoryExportUrl(), { cache: 'no-store' });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || '加载导出清单失败');
+    }
+
+    exportInventoryState.inventory = payload.inventory || {
+      feishu: [],
+      qq: [],
+    };
+    exportInventoryState.loading = false;
+    renderInventoryDialog();
+  } catch (error) {
+    exportInventoryState.loading = false;
+    exportInventoryState.error = error instanceof Error ? error.message : String(error);
+    renderInventoryDialog();
+  }
+}
+
+async function exportInventory(format) {
+  if (exportInventoryState.loading) {
+    return;
+  }
+
+  await loadExportInventory();
+  if (exportInventoryState.error) {
+    return;
+  }
+
+  const rows = getExportRows();
+  if (!rows.length) {
+    return;
+  }
+
+  if (format === 'csv') {
+    downloadBlob(buildCsvContent(rows), 'text/csv;charset=utf-8', buildExportFileName('csv'));
+    return;
+  }
+
+  downloadBlob(buildExcelContent(rows), 'application/vnd.ms-excel;charset=utf-8', buildExportFileName('xls'));
 }
 
 function renderAuth(platform, authState) {
@@ -335,9 +628,22 @@ async function loadState() {
   const response = await fetch('/api/state', { cache: 'no-store' });
   const data = await response.json();
 
+  currentState.auth = data.auth || {};
+  currentState.inventory = data.inventory || {
+    feishu: [],
+    qq: [],
+  };
+
   for (const platform of platforms) {
-    renderAuth(platform, data.auth[platform]);
-    renderInventory(platform, data.inventory[platform] || []);
+    renderAuth(platform, currentState.auth[platform]);
+    renderInventory(platform, currentState.inventory[platform] || []);
+  }
+
+  document.getElementById('open-inventory-button').textContent = '全部机器人';
+
+  const inventoryDialog = document.getElementById('inventory-dialog');
+  if (inventoryDialog.open) {
+    renderInventoryDialog();
   }
 }
 
@@ -500,10 +806,39 @@ async function bootstrap() {
     bindPlatform(platform);
   }
 
+  document.getElementById('open-inventory-button').addEventListener('click', () => {
+    openInventoryDialog();
+  });
+
   document.getElementById('refresh-button').addEventListener('click', () => {
     loadState().catch((error) => {
       console.error(error);
     });
+  });
+
+  const inventoryDialog = document.getElementById('inventory-dialog');
+  document.getElementById('close-inventory-button').addEventListener('click', () => {
+    inventoryDialog.close();
+  });
+  document.getElementById('apply-inventory-filter-button').addEventListener('click', () => {
+    void loadExportInventory();
+  });
+  document.getElementById('export-csv-button').addEventListener('click', () => {
+    void exportInventory('csv');
+  });
+  document.getElementById('export-excel-button').addEventListener('click', () => {
+    void exportInventory('excel');
+  });
+  inventoryDialog.addEventListener('click', (event) => {
+    if (event.target === inventoryDialog) {
+      inventoryDialog.close();
+    }
+  });
+  document.getElementById('inventory-filter-name').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void loadExportInventory();
+    }
   });
 
   await loadAvatarPresets();
